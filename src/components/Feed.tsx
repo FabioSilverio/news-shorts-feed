@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Channel } from "@/lib/channels";
 import type { ShortVideo } from "@/lib/youtube";
 import {
@@ -23,7 +23,12 @@ type ApiResponse = {
 export default function Feed() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [watched, setWatched] = useState<Set<string>>(new Set());
+  // `videos` = raw data from API
+  // `sessionVideos` = what's shown in the feed this session (stable, doesn't change when
+  //  individual videos get marked as watched mid-playback — only updates on new fetch or
+  //  when the user manually toggles hideWatched)
   const [videos, setVideos] = useState<ShortVideo[]>([]);
+  const [sessionVideos, setSessionVideos] = useState<ShortVideo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -33,6 +38,9 @@ export default function Feed() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  // Ref so we can read the current watched set inside effects without adding it as a dep
+  const watchedRef = useRef(watched);
+  watchedRef.current = watched;
 
   // Load persisted state on mount
   useEffect(() => {
@@ -93,12 +101,26 @@ export default function Feed() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [channels, fetchFeed, lastFetchedAt]);
 
-  const visibleVideos = useMemo(() => {
-    if (!hideWatched) return videos;
-    const filtered = videos.filter((v) => !watched.has(v.id));
-    // If everything is watched, fall back to showing all so user isn't stuck on empty
-    return filtered.length === 0 ? videos : filtered;
-  }, [videos, watched, hideWatched]);
+  // Rebuild the session list ONLY when new videos arrive from the API or when
+  // the user flips the hideWatched toggle. Never rebuilds because of mid-session
+  // watched updates — that's the key fix to stop the feed from jumping.
+  useEffect(() => {
+    if (videos.length === 0) {
+      setSessionVideos([]);
+      return;
+    }
+    let list: ShortVideo[];
+    if (hideWatched) {
+      const filtered = videos.filter((v) => !watchedRef.current.has(v.id));
+      list = filtered.length > 0 ? filtered : videos; // fallback: show all if all watched
+    } else {
+      list = videos;
+    }
+    setSessionVideos(list);
+    // Scroll back to top and reset active index whenever the session list is rebuilt
+    setActiveIdx(0);
+    containerRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  }, [videos, hideWatched]); // intentionally excludes `watched`
 
   // IntersectionObserver to detect active video
   useEffect(() => {
@@ -119,7 +141,7 @@ export default function Feed() {
     );
     itemRefs.current.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [visibleVideos]);
+  }, [sessionVideos]);
 
   const handleWatched = useCallback((id: string) => {
     setWatched((prev) => {
@@ -191,7 +213,7 @@ export default function Feed() {
         </div>
       )}
 
-      {!loading && !error && visibleVideos.length === 0 && (
+      {!loading && !error && sessionVideos.length === 0 && (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-white/70">
             No videos found. Add channels from the menu.
@@ -205,12 +227,12 @@ export default function Feed() {
         </div>
       )}
 
-      {!loading && !error && visibleVideos.length > 0 && (
+      {!loading && !error && sessionVideos.length > 0 && (
         <div
           ref={containerRef}
           className="no-scrollbar h-full w-full snap-y snap-mandatory overflow-y-scroll"
         >
-          {visibleVideos.map((v, idx) => (
+          {sessionVideos.map((v, idx) => (
             <div
               key={v.id}
               data-idx={idx}

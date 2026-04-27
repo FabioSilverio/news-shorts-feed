@@ -70,35 +70,35 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
   }, [fetchVideos]);
 
   return (
-    <main className="h-full overflow-y-auto bg-neutral-100 pt-16 text-neutral-950">
+    <main className="h-full overflow-y-auto bg-black pt-16 text-white">
       <div className="mx-auto w-full max-w-3xl px-3 pb-8 sm:px-4">
-        <div className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-black/5">
-          <div className="text-xs font-semibold uppercase tracking-[0.24em] text-red-600">
+        <div className="mb-4 rounded-2xl bg-neutral-950 p-4 shadow-xl ring-1 ring-white/10">
+          <div className="text-xs font-semibold uppercase tracking-[0.24em] text-red-400">
             Videos horizontais
           </div>
           <h1 className="mt-1 text-2xl font-bold tracking-tight">
             Mural de videos dos canais
           </h1>
-          <p className="mt-1 text-sm text-neutral-600">
+          <p className="mt-1 text-sm text-white/60">
             Videos normais dos mesmos canais cadastrados, em ordem cronologica: mais recentes primeiro.
           </p>
         </div>
 
         {loading && (
-          <div className="rounded-2xl bg-white p-6 text-center text-sm text-neutral-500 shadow-sm">
+          <div className="rounded-2xl bg-neutral-950 p-6 text-center text-sm text-white/50 shadow-xl ring-1 ring-white/10">
             Carregando videos...
           </div>
         )}
 
         {!loading && error && (
-          <div className="rounded-2xl bg-white p-6 text-center shadow-sm">
-            <div className="font-semibold text-red-600">Falha ao carregar</div>
-            <pre className="mt-3 overflow-auto rounded bg-neutral-100 p-3 text-left text-xs text-neutral-700">
+          <div className="rounded-2xl bg-neutral-950 p-6 text-center shadow-xl ring-1 ring-white/10">
+            <div className="font-semibold text-red-400">Falha ao carregar</div>
+            <pre className="mt-3 overflow-auto rounded bg-white/5 p-3 text-left text-xs text-white/70">
               {error}
             </pre>
             <button
               onClick={fetchVideos}
-              className="mt-4 rounded-full bg-neutral-950 px-4 py-2 text-sm font-semibold text-white"
+              className="mt-4 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-white/90"
             >
               Tentar de novo
             </button>
@@ -106,7 +106,7 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
         )}
 
         {!loading && !error && videos.length === 0 && (
-          <div className="rounded-2xl bg-white p-6 text-center text-sm text-neutral-500 shadow-sm">
+          <div className="rounded-2xl bg-neutral-950 p-6 text-center text-sm text-white/50 shadow-xl ring-1 ring-white/10">
             Nenhum video horizontal encontrado nos canais selecionados.
           </div>
         )}
@@ -115,18 +115,18 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
           {videos.map((video) => (
             <article
               key={video.id}
-              className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5"
+              className="overflow-hidden rounded-2xl bg-neutral-950 shadow-xl ring-1 ring-white/10"
             >
-              <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-4 py-3">
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">
                     {video.channelTitle}
                   </div>
-                  <div className="text-xs text-neutral-500">
+                  <div className="text-xs text-white/50">
                     {timeAgo(video.publishedAt)} · {new Date(video.publishedAt).toLocaleString()}
                   </div>
                 </div>
-                <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-600">
+                <span className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs font-medium text-white/70">
                   {formatDuration(video.durationSec)}
                 </span>
               </div>
@@ -149,7 +149,7 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
                   href={`https://www.youtube.com/watch?v=${video.id}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-3 inline-flex rounded-full bg-neutral-950 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800"
+                  className="mt-3 inline-flex rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-white/90"
                 >
                   Abrir no YouTube
                 </a>

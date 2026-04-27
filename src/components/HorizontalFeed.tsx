@@ -80,7 +80,7 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
             Mural de videos dos canais
           </h1>
           <p className="mt-1 text-sm text-white/60">
-            Videos normais dos mesmos canais cadastrados, em ordem cronologica: mais recentes primeiro.
+            Videos recentes dos mesmos canais cadastrados, em ordem cronologica: mais recentes primeiro.
           </p>
         </div>
 
@@ -126,9 +126,11 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
                     {timeAgo(video.publishedAt)} · {new Date(video.publishedAt).toLocaleString()}
                   </div>
                 </div>
-                <span className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs font-medium text-white/70">
-                  {formatDuration(video.durationSec)}
-                </span>
+                {video.durationSec > 0 && (
+                  <span className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs font-medium text-white/70">
+                    {formatDuration(video.durationSec)}
+                  </span>
+                )}
               </div>
 
               <div className="aspect-video bg-black">

@@ -11,6 +11,7 @@ export type ShortVideo = {
 };
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
+const YT_RSS = "https://www.youtube.com/feeds/videos.xml";
 
 /**
  * Parse ISO 8601 duration (e.g. "PT58S", "PT1M2S") to seconds.
@@ -71,7 +72,47 @@ type VideosListResponse = {
   }>;
 };
 
-type VideoDurationFilter = "any" | "long" | "medium" | "short";
+function decodeXml(value: string): string {
+  return value
+    .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function readXmlTag(xml: string, tag: string): string {
+  const match = xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
+  return match ? decodeXml(match[1].trim()) : "";
+}
+
+function readXmlAttr(xml: string, tag: string, attr: string): string {
+  const match = xml.match(new RegExp(`<${tag}[^>]*\\s${attr}="([^"]+)"`));
+  return match ? decodeXml(match[1]) : "";
+}
+
+function parseYoutubeRss(xml: string, channel: Channel): ShortVideo[] {
+  const entries = xml.match(/<entry>[\s\S]*?<\/entry>/g) ?? [];
+
+  return entries.flatMap((entry) => {
+    const id = readXmlTag(entry, "yt:videoId");
+    if (!id) return [];
+
+    return [
+      {
+        id,
+        title: readXmlTag(entry, "title"),
+        channelId: readXmlTag(entry, "yt:channelId") || channel.id,
+        channelTitle: readXmlTag(entry, "name") || channel.name,
+        publishedAt: readXmlTag(entry, "published") || readXmlTag(entry, "updated"),
+        thumbnail: readXmlAttr(entry, "media:thumbnail", "url"),
+        durationSec: 0,
+      },
+    ];
+  });
+}
 
 /**
  * Fetch latest videos for a single channel and filter to "Shorts" (<= 65s).
@@ -136,69 +177,19 @@ export async function fetchChannelVideos(
   channel: Channel,
   perChannel = 12,
 ): Promise<ShortVideo[]> {
-  const videos = await fetchChannelVideosByDuration(
-    channel,
-    perChannel,
-    "medium",
-  );
+  const url = new URL(YT_RSS);
+  url.searchParams.set("channel_id", channel.id);
 
-  if (videos.length > 0) return videos;
-
-  return fetchChannelVideosByDuration(channel, perChannel, "long");
-}
-
-async function fetchChannelVideosByDuration(
-  channel: Channel,
-  perChannel: number,
-  videoDuration: VideoDurationFilter,
-): Promise<ShortVideo[]> {
-  const search = await ytFetch<SearchListResponse>("search", {
-    part: "snippet",
-    channelId: channel.id,
-    maxResults: String(perChannel),
-    order: "date",
-    type: "video",
-    videoDuration,
+  const res = await fetch(url.toString(), {
+    next: { revalidate: 300 },
   });
-
-  const ids = search.items
-    .map((it) => it.id.videoId)
-    .filter((v): v is string => Boolean(v));
-
-  if (ids.length === 0) return [];
-
-  const details = await ytFetch<VideosListResponse>("videos", {
-    part: "contentDetails,snippet",
-    id: ids.join(","),
-  });
-
-  const byId = new Map(details.items.map((v) => [v.id, v]));
-  const videos: ShortVideo[] = [];
-
-  for (const it of search.items) {
-    const vid = it.id.videoId;
-    if (!vid) continue;
-    const detail = byId.get(vid);
-    if (!detail) continue;
-    const dur = parseISODuration(detail.contentDetails.duration);
-    if (dur <= 65) continue; // keep normal videos; shorts stay in the TikTok feed
-    videos.push({
-      id: vid,
-      title: it.snippet.title,
-      channelId: it.snippet.channelId,
-      channelTitle: it.snippet.channelTitle,
-      publishedAt: it.snippet.publishedAt,
-      thumbnail:
-        it.snippet.thumbnails.high?.url ||
-        it.snippet.thumbnails.medium?.url ||
-        it.snippet.thumbnails.default?.url ||
-        "",
-      durationSec: dur,
-    });
-    if (videos.length >= perChannel) break;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`YouTube RSS failed (${res.status}): ${body}`);
   }
 
-  return videos;
+  const xml = await res.text();
+  return parseYoutubeRss(xml, channel).slice(0, perChannel);
 }
 
 /**

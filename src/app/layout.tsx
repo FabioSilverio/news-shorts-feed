@@ -4,6 +4,10 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "News Shorts",
   description: "TikTok-style vertical video feed for news channels",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/apple-icon.svg",
+  },
 };
 
 export const viewport: Viewport = {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { DEFAULT_CHANNELS, type Channel } from "@/lib/channels";
 import { fetchAllVideos } from "@/lib/youtube";
 
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,12 +17,7 @@ export async function POST(req: NextRequest) {
     const videos = await fetchAllVideos(channels, 12);
     return NextResponse.json(
       { videos, fetchedAt: Date.now() },
-      {
-        headers: {
-          "Cache-Control":
-            "public, s-maxage=300, stale-while-revalidate=600",
-        },
-      },
+      { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
@@ -33,7 +28,10 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   try {
     const videos = await fetchAllVideos(DEFAULT_CHANNELS, 12);
-    return NextResponse.json({ videos, fetchedAt: Date.now() });
+    return NextResponse.json(
+      { videos, fetchedAt: Date.now() },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

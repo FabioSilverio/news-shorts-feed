@@ -4,6 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { Channel } from "@/lib/channels";
 import type { ShortVideo } from "@/lib/youtube";
 
+function thumbUrl(v: ShortVideo) {
+  if (v.thumbnail) return v.thumbnail;
+  return `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`;
+}
+
 const REFRESH_MS = 5 * 60 * 1000;
 
 type ApiResponse = {
@@ -30,6 +35,86 @@ function timeAgo(value: string) {
   return `${days}d ago`;
 }
 
+function HorizontalVideoCard({
+  video,
+  formatDuration,
+  timeAgo: ago,
+}: {
+  video: ShortVideo;
+  formatDuration: (s: number) => string;
+  timeAgo: (v: string) => string;
+}) {
+  const [play, setPlay] = useState(false);
+  const src = `https://www.youtube.com/embed/${video.id}?playsinline=1&modestbranding=1&rel=0${play ? "&autoplay=1" : ""}`;
+
+  return (
+    <article className="overflow-hidden rounded-2xl bg-neutral-950 shadow-xl ring-1 ring-white/10">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{video.channelTitle}</div>
+          <div className="text-xs text-white/50">
+            {ago(video.publishedAt)} · {new Date(video.publishedAt).toLocaleString()}
+          </div>
+        </div>
+        {video.durationSec > 0 && (
+          <span className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs font-medium text-white/70">
+            {formatDuration(video.durationSec)}
+          </span>
+        )}
+      </div>
+
+      <div className="relative aspect-video bg-black">
+        {play ? (
+          <iframe
+            key="embed"
+            src={src}
+            title={video.title}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+            allowFullScreen
+            className="h-full w-full"
+            loading="lazy"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPlay(true)}
+            className="group relative block h-full w-full overflow-hidden"
+            aria-label={`Play ${video.title}`}
+          >
+            <img
+              src={thumbUrl(video)}
+              alt=""
+              className="h-full w-full object-cover"
+              loading="lazy"
+              decoding="async"
+              fetchPriority="low"
+            />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/25 transition group-hover:bg-black/40">
+              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-red-600 text-white shadow-lg ring-4 ring-white/20 transition group-hover:scale-105 group-hover:bg-red-500">
+                <svg viewBox="0 0 24 24" className="ml-0.5 h-8 w-8" fill="currentColor" aria-hidden>
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </span>
+            </span>
+          </button>
+        )}
+      </div>
+
+      <div className="p-4">
+        <h2 className="text-base font-semibold leading-snug">{video.title}</h2>
+        <a
+          href={`https://www.youtube.com/watch?v=${video.id}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-white/90"
+        >
+          Abrir no YouTube
+        </a>
+      </div>
+    </article>
+  );
+}
+
 export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
   const [videos, setVideos] = useState<ShortVideo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +133,7 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channels }),
+        cache: "no-store",
       });
       const data = (await res.json()) as ApiResponse;
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -113,50 +199,12 @@ export default function HorizontalFeed({ channels }: { channels: Channel[] }) {
 
         <div className="space-y-4">
           {videos.map((video) => (
-            <article
+            <HorizontalVideoCard
               key={video.id}
-              className="overflow-hidden rounded-2xl bg-neutral-950 shadow-xl ring-1 ring-white/10"
-            >
-              <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">
-                    {video.channelTitle}
-                  </div>
-                  <div className="text-xs text-white/50">
-                    {timeAgo(video.publishedAt)} · {new Date(video.publishedAt).toLocaleString()}
-                  </div>
-                </div>
-                {video.durationSec > 0 && (
-                  <span className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-xs font-medium text-white/70">
-                    {formatDuration(video.durationSec)}
-                  </span>
-                )}
-              </div>
-
-              <div className="aspect-video bg-black">
-                <iframe
-                  src={`https://www.youtube.com/embed/${video.id}?playsinline=1&modestbranding=1&rel=0`}
-                  title={video.title}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                  className="h-full w-full"
-                />
-              </div>
-
-              <div className="p-4">
-                <h2 className="text-base font-semibold leading-snug">
-                  {video.title}
-                </h2>
-                <a
-                  href={`https://www.youtube.com/watch?v=${video.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-3 inline-flex rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-white/90"
-                >
-                  Abrir no YouTube
-                </a>
-              </div>
-            </article>
+              video={video}
+              formatDuration={formatDuration}
+              timeAgo={timeAgo}
+            />
           ))}
         </div>
       </div>

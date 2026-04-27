@@ -97,6 +97,9 @@ const MAX_UPLOADS_TO_SCAN = 200;
 const SHORTS_FETCH_CONCURRENCY = 4;
 const RSS_MAX_SHORTS = 15;
 const SEARCH_CANDIDATES = 50;
+/** Horizontal feed: avoid hundreds of items (many iframes on the page). */
+const HORIZONTAL_MAX_VIDEOS = 96;
+const VIDEOS_FETCH_CONCURRENCY = 6;
 
 function decodeXml(value: string): string {
   return value
@@ -359,22 +362,17 @@ export async function fetchAllVideos(
   channels: Channel[],
   perChannel = 12,
 ): Promise<ShortVideo[]> {
-  const results = await Promise.allSettled(
-    channels.map((c) => fetchChannelVideos(c, perChannel)),
-  );
-
-  const failures = results.filter((r) => r.status === "rejected");
-  const all: ShortVideo[] = results.flatMap((r) =>
-    r.status === "fulfilled" ? r.value : [],
-  );
-
-  if (all.length === 0 && failures.length > 0) {
-    const first = failures[0] as PromiseRejectedResult;
-    const message =
-      first.reason instanceof Error
-        ? first.reason.message
-        : "Failed to load horizontal videos";
-    throw new Error(message);
+  const all: ShortVideo[] = [];
+  const rejections: unknown[] = [];
+  for (let i = 0; i < channels.length; i += VIDEOS_FETCH_CONCURRENCY) {
+    const slice = channels.slice(i, i + VIDEOS_FETCH_CONCURRENCY);
+    const results = await Promise.allSettled(
+      slice.map((c) => fetchChannelVideos(c, perChannel)),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled") all.push(...r.value);
+      else rejections.push(r.reason);
+    }
   }
 
   all.sort(
@@ -382,5 +380,14 @@ export async function fetchAllVideos(
       new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
   );
 
-  return all;
+  if (all.length === 0 && rejections.length > 0) {
+    const reason = rejections[0];
+    const message =
+      reason instanceof Error
+        ? reason.message
+        : "Failed to load horizontal videos";
+    throw new Error(message);
+  }
+
+  return all.slice(0, HORIZONTAL_MAX_VIDEOS);
 }

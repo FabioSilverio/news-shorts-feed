@@ -134,10 +134,11 @@ export async function fetchChannelVideos(
   channel: Channel,
   perChannel = 12,
 ): Promise<ShortVideo[]> {
+  const searchWindow = 50; // YouTube search.list max; filter Shorts after widening the window.
   const search = await ytFetch<SearchListResponse>("search", {
     part: "snippet",
     channelId: channel.id,
-    maxResults: String(perChannel),
+    maxResults: String(searchWindow),
     order: "date",
     type: "video",
   });
@@ -176,6 +177,7 @@ export async function fetchChannelVideos(
         "",
       durationSec: dur,
     });
+    if (videos.length >= perChannel) break;
   }
 
   return videos;

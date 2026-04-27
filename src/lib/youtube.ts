@@ -71,6 +71,8 @@ type VideosListResponse = {
   }>;
 };
 
+type VideoDurationFilter = "any" | "long" | "medium" | "short";
+
 /**
  * Fetch latest videos for a single channel and filter to "Shorts" (<= 65s).
  */
@@ -134,13 +136,29 @@ export async function fetchChannelVideos(
   channel: Channel,
   perChannel = 12,
 ): Promise<ShortVideo[]> {
-  const searchWindow = 50; // YouTube search.list max; filter Shorts after widening the window.
+  const videos = await fetchChannelVideosByDuration(
+    channel,
+    perChannel,
+    "medium",
+  );
+
+  if (videos.length > 0) return videos;
+
+  return fetchChannelVideosByDuration(channel, perChannel, "long");
+}
+
+async function fetchChannelVideosByDuration(
+  channel: Channel,
+  perChannel: number,
+  videoDuration: VideoDurationFilter,
+): Promise<ShortVideo[]> {
   const search = await ytFetch<SearchListResponse>("search", {
     part: "snippet",
     channelId: channel.id,
-    maxResults: String(searchWindow),
+    maxResults: String(perChannel),
     order: "date",
     type: "video",
+    videoDuration,
   });
 
   const ids = search.items
@@ -219,9 +237,19 @@ export async function fetchAllVideos(
     channels.map((c) => fetchChannelVideos(c, perChannel)),
   );
 
+  const failures = results.filter((r) => r.status === "rejected");
   const all: ShortVideo[] = results.flatMap((r) =>
     r.status === "fulfilled" ? r.value : [],
   );
+
+  if (all.length === 0 && failures.length > 0) {
+    const first = failures[0] as PromiseRejectedResult;
+    const message =
+      first.reason instanceof Error
+        ? first.reason.message
+        : "Failed to load horizontal videos";
+    throw new Error(message);
+  }
 
   all.sort(
     (a, b) =>

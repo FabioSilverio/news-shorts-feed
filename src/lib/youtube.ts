@@ -128,6 +128,60 @@ export async function fetchChannelShorts(
 }
 
 /**
+ * Fetch latest non-Shorts videos for a single channel (normal horizontal feed).
+ */
+export async function fetchChannelVideos(
+  channel: Channel,
+  perChannel = 12,
+): Promise<ShortVideo[]> {
+  const search = await ytFetch<SearchListResponse>("search", {
+    part: "snippet",
+    channelId: channel.id,
+    maxResults: String(perChannel),
+    order: "date",
+    type: "video",
+  });
+
+  const ids = search.items
+    .map((it) => it.id.videoId)
+    .filter((v): v is string => Boolean(v));
+
+  if (ids.length === 0) return [];
+
+  const details = await ytFetch<VideosListResponse>("videos", {
+    part: "contentDetails,snippet",
+    id: ids.join(","),
+  });
+
+  const byId = new Map(details.items.map((v) => [v.id, v]));
+  const videos: ShortVideo[] = [];
+
+  for (const it of search.items) {
+    const vid = it.id.videoId;
+    if (!vid) continue;
+    const detail = byId.get(vid);
+    if (!detail) continue;
+    const dur = parseISODuration(detail.contentDetails.duration);
+    if (dur <= 65) continue; // keep normal videos; shorts stay in the TikTok feed
+    videos.push({
+      id: vid,
+      title: it.snippet.title,
+      channelId: it.snippet.channelId,
+      channelTitle: it.snippet.channelTitle,
+      publishedAt: it.snippet.publishedAt,
+      thumbnail:
+        it.snippet.thumbnails.high?.url ||
+        it.snippet.thumbnails.medium?.url ||
+        it.snippet.thumbnails.default?.url ||
+        "",
+      durationSec: dur,
+    });
+  }
+
+  return videos;
+}
+
+/**
  * Fetch shorts from many channels in parallel, then sort everything
  * by publishedAt descending so the feed is strictly chronological (newest first).
  */
@@ -144,6 +198,29 @@ export async function fetchAllShorts(
   );
 
   // Global sort: newest first across all channels
+  all.sort(
+    (a, b) =>
+      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
+  );
+
+  return all;
+}
+
+/**
+ * Fetch normal videos from many channels and sort newest first globally.
+ */
+export async function fetchAllVideos(
+  channels: Channel[],
+  perChannel = 12,
+): Promise<ShortVideo[]> {
+  const results = await Promise.allSettled(
+    channels.map((c) => fetchChannelVideos(c, perChannel)),
+  );
+
+  const all: ShortVideo[] = results.flatMap((r) =>
+    r.status === "fulfilled" ? r.value : [],
+  );
+
   all.sort(
     (a, b) =>
       new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),

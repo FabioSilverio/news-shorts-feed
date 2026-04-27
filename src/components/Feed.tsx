@@ -13,6 +13,7 @@ import {
 } from "@/lib/storage";
 import VideoPlayer from "./VideoPlayer";
 import Sidebar from "./Sidebar";
+import HorizontalFeed from "./HorizontalFeed";
 
 const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -62,6 +63,7 @@ export default function Feed() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [section, setSection] = useState<"shorts" | "horizontal">("shorts");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hideWatched, setHideWatched] = useState(true);
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
@@ -211,31 +213,56 @@ export default function Feed() {
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-        <div className="pointer-events-auto rounded-full bg-black/50 px-3 py-1.5 text-xs backdrop-blur">
-          News Shorts
+        <div className="pointer-events-auto rounded-full bg-black/60 p-1 text-xs backdrop-blur">
+          <button
+            onClick={() => setSection("shorts")}
+            className={`rounded-full px-3 py-1.5 font-semibold transition ${
+              section === "shorts"
+                ? "bg-white text-black"
+                : "text-white/70 hover:text-white"
+            }`}
+          >
+            TikTok
+          </button>
+          <button
+            onClick={() => setSection("horizontal")}
+            className={`rounded-full px-3 py-1.5 font-semibold transition ${
+              section === "horizontal"
+                ? "bg-white text-black"
+                : "text-white/70 hover:text-white"
+            }`}
+          >
+            Horizontais
+          </button>
         </div>
-        <button
-          onClick={() => {
-            scrollToTopOnNextRebuild.current = true;
-            setHideWatched((v) => !v);
-          }}
-          className={`pointer-events-auto rounded-full px-3 py-1.5 text-xs backdrop-blur ${
-            hideWatched ? "bg-white text-black" : "bg-black/50 text-white"
-          }`}
-          title={hideWatched ? "Hiding watched videos" : "Showing all videos"}
-        >
-          {hideWatched ? "Hide watched" : "Show all"}
-        </button>
+        {section === "shorts" ? (
+          <button
+            onClick={() => {
+              scrollToTopOnNextRebuild.current = true;
+              setHideWatched((v) => !v);
+            }}
+            className={`pointer-events-auto rounded-full px-3 py-1.5 text-xs backdrop-blur ${
+              hideWatched ? "bg-white text-black" : "bg-black/50 text-white"
+            }`}
+            title={hideWatched ? "Hiding watched videos" : "Showing all videos"}
+          >
+            {hideWatched ? "Hide watched" : "Show all"}
+          </button>
+        ) : (
+          <div className="w-[88px]" />
+        )}
       </header>
 
       {/* Feed */}
-      {loading && (
+      {section === "horizontal" && <HorizontalFeed channels={channels} />}
+
+      {section === "shorts" && loading && (
         <div className="flex h-full w-full items-center justify-center text-white/60">
           Loading feed…
         </div>
       )}
 
-      {!loading && error && (
+      {section === "shorts" && !loading && error && (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-red-300">Failed to load feed</div>
           <pre className="max-w-full overflow-auto rounded bg-white/5 p-3 text-xs text-white/70">
@@ -250,7 +277,7 @@ export default function Feed() {
         </div>
       )}
 
-      {!loading && !error && sessionVideos.length === 0 && (
+      {section === "shorts" && !loading && !error && sessionVideos.length === 0 && (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-white/70">
             No videos found. Add channels from the menu.
@@ -264,7 +291,7 @@ export default function Feed() {
         </div>
       )}
 
-      {!loading && !error && sessionVideos.length > 0 && (
+      {section === "shorts" && !loading && !error && sessionVideos.length > 0 && (
         <div
           ref={containerRef}
           className="no-scrollbar h-full w-full snap-y snap-mandatory overflow-y-scroll"

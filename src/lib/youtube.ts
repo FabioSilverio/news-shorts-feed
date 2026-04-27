@@ -41,23 +41,6 @@ async function ytFetch<T>(path: string, params: Record<string, string>): Promise
   return res.json() as Promise<T>;
 }
 
-type SearchListResponse = {
-  items: Array<{
-    id: { videoId?: string };
-    snippet: {
-      publishedAt: string;
-      channelId: string;
-      channelTitle: string;
-      title: string;
-      thumbnails: {
-        high?: { url: string };
-        medium?: { url: string };
-        default?: { url: string };
-      };
-    };
-  }>;
-};
-
 type VideosListResponse = {
   items: Array<{
     id: string;
@@ -114,55 +97,66 @@ function parseYoutubeRss(xml: string, channel: Channel): ShortVideo[] {
   });
 }
 
+/** How many recent uploads to scan for Shorts (RSS = newest first). */
+const RSS_SCAN_FOR_SHORTS = 50;
+
 /**
  * Fetch latest videos for a single channel and filter to "Shorts" (<= 65s).
+ *
+ * Uses the channel upload RSS feed (newest first) + `videos.list` for duration.
+ * The Search API with `videoDuration: "short"` has been unreliable for actual
+ * Shorts vs chronology; RSS matches the horizontal feed and stays current.
  */
 export async function fetchChannelShorts(
   channel: Channel,
   perChannel = 15,
 ): Promise<ShortVideo[]> {
-  // 1. Search latest videos for the channel
-  const search = await ytFetch<SearchListResponse>("search", {
-    part: "snippet",
-    channelId: channel.id,
-    maxResults: String(perChannel),
-    order: "date",
-    type: "video",
-    videoDuration: "short", // < 4 min, Shorts will be in this bucket
+  const url = new URL(YT_RSS);
+  url.searchParams.set("channel_id", channel.id);
+
+  const res = await fetch(url.toString(), {
+    next: { revalidate: 300 },
   });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`YouTube RSS failed (${res.status}): ${body}`);
+  }
 
-  const ids = search.items
-    .map((it) => it.id.videoId)
-    .filter((v): v is string => Boolean(v));
+  const xml = await res.text();
+  const candidates = parseYoutubeRss(xml, channel).slice(0, RSS_SCAN_FOR_SHORTS);
+  if (candidates.length === 0) return [];
 
-  if (ids.length === 0) return [];
-
-  // 2. Get contentDetails to filter only true shorts (<= 65s)
-  const details = await ytFetch<VideosListResponse>("videos", {
-    part: "contentDetails,snippet",
-    id: ids.join(","),
-  });
-
-  const byId = new Map(details.items.map((v) => [v.id, v]));
+  const byId = new Map<string, VideosListResponse["items"][0]>();
+  for (let i = 0; i < candidates.length; i += 50) {
+    const chunk = candidates.slice(i, i + 50);
+    const details = await ytFetch<VideosListResponse>("videos", {
+      part: "contentDetails,snippet",
+      id: chunk.map((c) => c.id).join(","),
+    });
+    for (const item of details.items) {
+      byId.set(item.id, item);
+    }
+  }
 
   const shorts: ShortVideo[] = [];
-  for (const it of search.items) {
-    const vid = it.id.videoId;
-    if (!vid) continue;
-    const detail = byId.get(vid);
+  for (const cand of candidates) {
+    if (shorts.length >= perChannel) break;
+    const detail = byId.get(cand.id);
     if (!detail) continue;
     const dur = parseISODuration(detail.contentDetails.duration);
-    if (dur === 0 || dur > 65) continue; // filter to actual Shorts
+    if (dur === 0 || dur > 65) continue;
+
+    const sn = detail.snippet;
     shorts.push({
-      id: vid,
-      title: it.snippet.title,
-      channelId: it.snippet.channelId,
-      channelTitle: it.snippet.channelTitle,
-      publishedAt: it.snippet.publishedAt,
+      id: cand.id,
+      title: sn?.title ?? cand.title,
+      channelId: sn?.channelId ?? cand.channelId,
+      channelTitle: sn?.channelTitle ?? cand.channelTitle,
+      publishedAt: sn?.publishedAt ?? cand.publishedAt,
       thumbnail:
-        it.snippet.thumbnails.high?.url ||
-        it.snippet.thumbnails.medium?.url ||
-        it.snippet.thumbnails.default?.url ||
+        sn?.thumbnails?.high?.url ||
+        sn?.thumbnails?.medium?.url ||
+        cand.thumbnail ||
         "",
       durationSec: dur,
     });

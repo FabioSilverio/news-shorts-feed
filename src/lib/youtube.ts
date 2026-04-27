@@ -66,9 +66,26 @@ type ChannelsListResponse = {
 
 type PlaylistItemsResponse = {
   nextPageToken?: string;
+  items?: Array<{
+    snippet?: {
+      resourceId?: { kind?: string; videoId?: string };
+    };
+  }>;
+};
+
+type SearchListResponse = {
   items: Array<{
+    id: { videoId?: string };
     snippet: {
-      resourceId: { kind: string; videoId?: string };
+      publishedAt: string;
+      channelId: string;
+      channelTitle: string;
+      title: string;
+      thumbnails: {
+        high?: { url: string };
+        medium?: { url: string };
+        default?: { url: string };
+      };
     };
   }>;
 };
@@ -76,6 +93,10 @@ type PlaylistItemsResponse = {
 const VIDEO_ID_CHUNK = 50;
 /** YouTube channel RSS is ~15 items; we must paginate the uploads playlist instead. */
 const MAX_UPLOADS_TO_SCAN = 200;
+/** How many channel fetches run at once to reduce 403 / quota bursts on serverless. */
+const SHORTS_FETCH_CONCURRENCY = 4;
+const RSS_MAX_SHORTS = 15;
+const SEARCH_CANDIDATES = 50;
 
 function decodeXml(value: string): string {
   return value
@@ -106,6 +127,90 @@ async function getUploadsPlaylistId(channelId: string): Promise<string | null> {
   return data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads ?? null;
 }
 
+async function detailsMapFromIds(
+  orderedIds: string[],
+): Promise<Map<string, VideosListResponse["items"][0]>> {
+  const byId = new Map<string, VideosListResponse["items"][0]>();
+  for (let i = 0; i < orderedIds.length; i += VIDEO_ID_CHUNK) {
+    const chunk = orderedIds.slice(i, i + VIDEO_ID_CHUNK);
+    if (chunk.length === 0) break;
+    const details = await ytFetch<VideosListResponse>("videos", {
+      part: "contentDetails,snippet",
+      id: chunk.join(","),
+    });
+    for (const item of details.items ?? []) {
+      byId.set(item.id, item);
+    }
+  }
+  return byId;
+}
+
+function shortsFromDetailsMap(
+  orderedIds: string[],
+  byId: Map<string, VideosListResponse["items"][0]>,
+  perChannel: number,
+): ShortVideo[] {
+  const shorts: ShortVideo[] = [];
+  for (const vid of orderedIds) {
+    if (shorts.length >= perChannel) break;
+    const detail = byId.get(vid);
+    if (!detail) continue;
+    const dur = parseISODuration(detail.contentDetails.duration);
+    if (dur === 0 || dur > 65) continue;
+    const sn = detail.snippet;
+    if (!sn) continue;
+    shorts.push({
+      id: vid,
+      title: sn.title,
+      channelId: sn.channelId,
+      channelTitle: sn.channelTitle,
+      publishedAt: sn.publishedAt,
+      thumbnail:
+        sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || "",
+      durationSec: dur,
+    });
+  }
+  return shorts;
+}
+
+async function fetchChannelShortsFromRss(
+  channel: Channel,
+  perChannel: number,
+): Promise<ShortVideo[]> {
+  const url = new URL(YT_RSS);
+  url.searchParams.set("channel_id", channel.id);
+  const res = await fetch(url.toString(), { next: { revalidate: 300 } });
+  if (!res.ok) return [];
+  const candidates = parseYoutubeRss(await res.text(), channel).slice(0, RSS_MAX_SHORTS);
+  if (candidates.length === 0) return [];
+  const byId = await detailsMapFromIds(candidates.map((c) => c.id));
+  return shortsFromDetailsMap(
+    candidates.map((c) => c.id),
+    byId,
+    perChannel,
+  );
+}
+
+async function fetchChannelShortsFromSearch(
+  channel: Channel,
+  perChannel: number,
+): Promise<ShortVideo[]> {
+  const search = await ytFetch<SearchListResponse>("search", {
+    part: "snippet",
+    channelId: channel.id,
+    maxResults: String(SEARCH_CANDIDATES),
+    order: "date",
+    type: "video",
+    videoDuration: "short",
+  });
+  const ids = (search.items ?? [])
+    .map((it) => it.id.videoId)
+    .filter((v): v is string => Boolean(v));
+  if (ids.length === 0) return [];
+  const byId = await detailsMapFromIds(ids);
+  return shortsFromDetailsMap(ids, byId, perChannel);
+}
+
 /**
  * Video IDs in upload order (newest first) from the channel uploads playlist.
  */
@@ -124,9 +229,8 @@ async function listUploadVideoIds(
       ...(pageToken ? { pageToken } : {}),
     });
 
-    for (const it of data.items) {
-      if (it.snippet.resourceId.kind !== "youtube#video") continue;
-      const vid = it.snippet.resourceId.videoId;
+    for (const it of data.items ?? []) {
+      const vid = it.snippet?.resourceId?.videoId;
       if (vid) ids.push(vid);
       if (ids.length >= maxItems) break;
     }
@@ -161,53 +265,42 @@ function parseYoutubeRss(xml: string, channel: Channel): ShortVideo[] {
 }
 
 /**
- * True Shorts (≤ 65s) from a channel, walking far past the 15 videos YouTube
- * RSS exposes. Uses the channel uploads playlist + `videos.list` (cheap quota).
+ * True Shorts (≤ 65s): uploads playlist (best depth), then RSS, then `search` if needed.
+ * Failures in an earlier step fall through so a burst 403 on one call does not empty the whole feed.
  */
 export async function fetchChannelShorts(
   channel: Channel,
   perChannel = 15,
 ): Promise<ShortVideo[]> {
-  const uploads = await getUploadsPlaylistId(channel.id);
-  if (!uploads) return [];
-
-  const orderedIds = await listUploadVideoIds(uploads, MAX_UPLOADS_TO_SCAN);
-  if (orderedIds.length === 0) return [];
-
-  const byId = new Map<string, VideosListResponse["items"][0]>();
-  for (let i = 0; i < orderedIds.length; i += VIDEO_ID_CHUNK) {
-    const chunk = orderedIds.slice(i, i + VIDEO_ID_CHUNK);
-    if (chunk.length === 0) break;
-    const details = await ytFetch<VideosListResponse>("videos", {
-      part: "contentDetails,snippet",
-      id: chunk.join(","),
-    });
-    for (const item of details.items) {
-      byId.set(item.id, item);
+  // 1) Uploads playlist — walk past the ~15-item RSS cap
+  try {
+    const uploads = await getUploadsPlaylistId(channel.id);
+    if (uploads) {
+      const orderedIds = await listUploadVideoIds(uploads, MAX_UPLOADS_TO_SCAN);
+      if (orderedIds.length > 0) {
+        const byId = await detailsMapFromIds(orderedIds);
+        const s = shortsFromDetailsMap(orderedIds, byId, perChannel);
+        if (s.length > 0) return s;
+      }
     }
+  } catch {
+    // quota / network — try cheaper paths
   }
 
-  const shorts: ShortVideo[] = [];
-  for (const vid of orderedIds) {
-    if (shorts.length >= perChannel) break;
-    const detail = byId.get(vid);
-    if (!detail) continue;
-    const dur = parseISODuration(detail.contentDetails.duration);
-    if (dur === 0 || dur > 65) continue;
-    const sn = detail.snippet;
-    if (!sn) continue;
-    shorts.push({
-      id: vid,
-      title: sn.title,
-      channelId: sn.channelId,
-      channelTitle: sn.channelTitle,
-      publishedAt: sn.publishedAt,
-      thumbnail:
-        sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || "",
-      durationSec: dur,
-    });
+  // 2) RSS (no search quota) — at least 15 most recent video IDs
+  try {
+    const s = await fetchChannelShortsFromRss(channel, perChannel);
+    if (s.length > 0) return s;
+  } catch {
+    /* ignore */
   }
-  return shorts;
+
+  // 3) Search API — 100 units; last resort
+  try {
+    return await fetchChannelShortsFromSearch(channel, perChannel);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -240,15 +333,17 @@ export async function fetchAllShorts(
   channels: Channel[],
   perChannel = 15,
 ): Promise<ShortVideo[]> {
-  const results = await Promise.allSettled(
-    channels.map((c) => fetchChannelShorts(c, perChannel)),
-  );
+  const all: ShortVideo[] = [];
+  for (let i = 0; i < channels.length; i += SHORTS_FETCH_CONCURRENCY) {
+    const slice = channels.slice(i, i + SHORTS_FETCH_CONCURRENCY);
+    const results = await Promise.allSettled(
+      slice.map((c) => fetchChannelShorts(c, perChannel)),
+    );
+    for (const r of results) {
+      if (r.status === "fulfilled") all.push(...r.value);
+    }
+  }
 
-  const all: ShortVideo[] = results.flatMap((r) =>
-    r.status === "fulfilled" ? r.value : [],
-  );
-
-  // Global sort: newest first across all channels
   all.sort(
     (a, b) =>
       new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),

@@ -2,9 +2,11 @@
 
 import type { Channel } from "./channels";
 import { DEFAULT_CHANNELS } from "./channels";
+import type { ShortVideo } from "./youtube";
 
 const KEY_WATCHED = "nsf:watched:v1";
 const KEY_CHANNELS = "nsf:channels:v1";
+const KEY_QUEUE = "nsf:queue:v1";
 
 // ---------- Watched videos ----------
 
@@ -26,6 +28,29 @@ export function saveWatched(ids: Set<string>) {
     // Cap size so localStorage doesn't blow up over time.
     const arr = Array.from(ids).slice(-5000);
     localStorage.setItem(KEY_WATCHED, JSON.stringify(arr));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
+// ---------- Persistent unwatched queue ----------
+
+export function loadQueue(): ShortVideo[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(KEY_QUEUE);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as ShortVideo[];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveQueue(videos: ShortVideo[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(KEY_QUEUE, JSON.stringify(videos.slice(0, 1000)));
   } catch {
     /* ignore quota errors */
   }

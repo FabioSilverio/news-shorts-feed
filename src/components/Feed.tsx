@@ -5,8 +5,10 @@ import type { Channel } from "@/lib/channels";
 import type { ShortVideo } from "@/lib/youtube";
 import {
   loadChannels,
+  loadQueue,
   loadWatched,
   saveChannels,
+  saveQueue,
   saveWatched,
 } from "@/lib/storage";
 import VideoPlayer from "./VideoPlayer";
@@ -19,6 +21,34 @@ type ApiResponse = {
   fetchedAt: number;
   error?: string;
 };
+
+function buildSessionQueue(
+  latestVideos: ShortVideo[],
+  watchedIds: Set<string>,
+  hideWatched: boolean,
+  channels: Channel[],
+) {
+  if (!hideWatched) return latestVideos;
+
+  const selectedChannelIds = new Set(channels.map((c) => c.id));
+  const latestUnwatched = latestVideos.filter((v) => !watchedIds.has(v.id));
+  const latestIds = new Set(latestUnwatched.map((v) => v.id));
+
+  // Persisted queue = unwatched videos from previous sessions. It comes after
+  // today's freshest uploads, preserving where the user left off.
+  const carryOver = loadQueue().filter(
+    (v) =>
+      selectedChannelIds.has(v.channelId) &&
+      !watchedIds.has(v.id) &&
+      !latestIds.has(v.id),
+  );
+
+  const nextQueue = [...latestUnwatched, ...carryOver];
+  saveQueue(nextQueue);
+
+  // If the user watched everything, don't leave the page blank.
+  return nextQueue.length > 0 ? nextQueue : latestVideos;
+}
 
 export default function Feed() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -38,6 +68,7 @@ export default function Feed() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const scrollToTopOnNextRebuild = useRef(true);
   // Ref so we can read the current watched set inside effects without adding it as a dep
   const watchedRef = useRef(watched);
   watchedRef.current = watched;
@@ -49,7 +80,7 @@ export default function Feed() {
   }, []);
 
   const fetchFeed = useCallback(
-    async (chans: Channel[]) => {
+    async (chans: Channel[], scrollToTop = false) => {
       setError(null);
       try {
         const res = await fetch("/api/feed", {
@@ -59,6 +90,7 @@ export default function Feed() {
         });
         const data = (await res.json()) as ApiResponse;
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        scrollToTopOnNextRebuild.current = scrollToTop;
         setVideos(data.videos);
         setLastFetchedAt(data.fetchedAt);
       } catch (e) {
@@ -78,13 +110,13 @@ export default function Feed() {
       return;
     }
     setLoading(true);
-    fetchFeed(channels);
+    fetchFeed(channels, true);
   }, [channels, fetchFeed]);
 
   // Auto-refresh every 5min
   useEffect(() => {
     if (channels.length === 0) return;
-    const id = setInterval(() => fetchFeed(channels), REFRESH_MS);
+    const id = setInterval(() => fetchFeed(channels, false), REFRESH_MS);
     return () => clearInterval(id);
   }, [channels, fetchFeed]);
 
@@ -94,7 +126,7 @@ export default function Feed() {
       if (document.visibilityState !== "visible") return;
       if (!lastFetchedAt) return;
       if (Date.now() - lastFetchedAt > REFRESH_MS) {
-        fetchFeed(channels);
+        fetchFeed(channels, false);
       }
     }
     document.addEventListener("visibilitychange", onVis);
@@ -109,18 +141,19 @@ export default function Feed() {
       setSessionVideos([]);
       return;
     }
-    let list: ShortVideo[];
-    if (hideWatched) {
-      const filtered = videos.filter((v) => !watchedRef.current.has(v.id));
-      list = filtered.length > 0 ? filtered : videos; // fallback: show all if all watched
-    } else {
-      list = videos;
-    }
+    const list = buildSessionQueue(
+      videos,
+      watchedRef.current,
+      hideWatched,
+      channels,
+    );
     setSessionVideos(list);
-    // Scroll back to top and reset active index whenever the session list is rebuilt
-    setActiveIdx(0);
-    containerRef.current?.scrollTo({ top: 0, behavior: "instant" });
-  }, [videos, hideWatched]); // intentionally excludes `watched`
+    if (scrollToTopOnNextRebuild.current) {
+      scrollToTopOnNextRebuild.current = false;
+      setActiveIdx(0);
+      containerRef.current?.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [videos, hideWatched, channels]); // intentionally excludes `watched`
 
   // IntersectionObserver to detect active video
   useEffect(() => {
@@ -149,6 +182,7 @@ export default function Feed() {
       const next = new Set(prev);
       next.add(id);
       saveWatched(next);
+      saveQueue(loadQueue().filter((v) => v.id !== id));
       return next;
     });
   }, []);
@@ -181,7 +215,10 @@ export default function Feed() {
           News Shorts
         </div>
         <button
-          onClick={() => setHideWatched((v) => !v)}
+          onClick={() => {
+            scrollToTopOnNextRebuild.current = true;
+            setHideWatched((v) => !v);
+          }}
           className={`pointer-events-auto rounded-full px-3 py-1.5 text-xs backdrop-blur ${
             hideWatched ? "bg-white text-black" : "bg-black/50 text-white"
           }`}
@@ -205,7 +242,7 @@ export default function Feed() {
             {error}
           </pre>
           <button
-            onClick={() => fetchFeed(channels)}
+            onClick={() => fetchFeed(channels, true)}
             className="rounded bg-white px-4 py-2 text-sm font-semibold text-black"
           >
             Retry

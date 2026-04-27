@@ -55,6 +55,28 @@ type VideosListResponse = {
   }>;
 };
 
+type ChannelsListResponse = {
+  items: Array<{
+    id: string;
+    contentDetails: {
+      relatedPlaylists: { uploads?: string };
+    };
+  }>;
+};
+
+type PlaylistItemsResponse = {
+  nextPageToken?: string;
+  items: Array<{
+    snippet: {
+      resourceId: { kind: string; videoId?: string };
+    };
+  }>;
+};
+
+const VIDEO_ID_CHUNK = 50;
+/** YouTube channel RSS is ~15 items; we must paginate the uploads playlist instead. */
+const MAX_UPLOADS_TO_SCAN = 200;
+
 function decodeXml(value: string): string {
   return value
     .replace(/<!\[CDATA\[(.*?)\]\]>/gs, "$1")
@@ -74,6 +96,47 @@ function readXmlTag(xml: string, tag: string): string {
 function readXmlAttr(xml: string, tag: string, attr: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*\\s${attr}="([^"]+)"`));
   return match ? decodeXml(match[1]) : "";
+}
+
+async function getUploadsPlaylistId(channelId: string): Promise<string | null> {
+  const data = await ytFetch<ChannelsListResponse>("channels", {
+    part: "contentDetails",
+    id: channelId,
+  });
+  return data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads ?? null;
+}
+
+/**
+ * Video IDs in upload order (newest first) from the channel uploads playlist.
+ */
+async function listUploadVideoIds(
+  uploadsPlaylistId: string,
+  maxItems: number,
+): Promise<string[]> {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+
+  while (ids.length < maxItems) {
+    const data = await ytFetch<PlaylistItemsResponse>("playlistItems", {
+      part: "snippet",
+      playlistId: uploadsPlaylistId,
+      maxResults: "50",
+      ...(pageToken ? { pageToken } : {}),
+    });
+
+    for (const it of data.items) {
+      if (it.snippet.resourceId.kind !== "youtube#video") continue;
+      const vid = it.snippet.resourceId.videoId;
+      if (vid) ids.push(vid);
+      if (ids.length >= maxItems) break;
+    }
+
+    if (ids.length >= maxItems) break;
+    if (!data.nextPageToken) break;
+    pageToken = data.nextPageToken;
+  }
+
+  return ids;
 }
 
 function parseYoutubeRss(xml: string, channel: Channel): ShortVideo[] {
@@ -97,41 +160,27 @@ function parseYoutubeRss(xml: string, channel: Channel): ShortVideo[] {
   });
 }
 
-/** How many recent uploads to scan for Shorts (RSS = newest first). */
-const RSS_SCAN_FOR_SHORTS = 50;
-
 /**
- * Fetch latest videos for a single channel and filter to "Shorts" (<= 65s).
- *
- * Uses the channel upload RSS feed (newest first) + `videos.list` for duration.
- * The Search API with `videoDuration: "short"` has been unreliable for actual
- * Shorts vs chronology; RSS matches the horizontal feed and stays current.
+ * True Shorts (≤ 65s) from a channel, walking far past the 15 videos YouTube
+ * RSS exposes. Uses the channel uploads playlist + `videos.list` (cheap quota).
  */
 export async function fetchChannelShorts(
   channel: Channel,
   perChannel = 15,
 ): Promise<ShortVideo[]> {
-  const url = new URL(YT_RSS);
-  url.searchParams.set("channel_id", channel.id);
+  const uploads = await getUploadsPlaylistId(channel.id);
+  if (!uploads) return [];
 
-  const res = await fetch(url.toString(), {
-    next: { revalidate: 300 },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`YouTube RSS failed (${res.status}): ${body}`);
-  }
-
-  const xml = await res.text();
-  const candidates = parseYoutubeRss(xml, channel).slice(0, RSS_SCAN_FOR_SHORTS);
-  if (candidates.length === 0) return [];
+  const orderedIds = await listUploadVideoIds(uploads, MAX_UPLOADS_TO_SCAN);
+  if (orderedIds.length === 0) return [];
 
   const byId = new Map<string, VideosListResponse["items"][0]>();
-  for (let i = 0; i < candidates.length; i += 50) {
-    const chunk = candidates.slice(i, i + 50);
+  for (let i = 0; i < orderedIds.length; i += VIDEO_ID_CHUNK) {
+    const chunk = orderedIds.slice(i, i + VIDEO_ID_CHUNK);
+    if (chunk.length === 0) break;
     const details = await ytFetch<VideosListResponse>("videos", {
       part: "contentDetails,snippet",
-      id: chunk.map((c) => c.id).join(","),
+      id: chunk.join(","),
     });
     for (const item of details.items) {
       byId.set(item.id, item);
@@ -139,25 +188,22 @@ export async function fetchChannelShorts(
   }
 
   const shorts: ShortVideo[] = [];
-  for (const cand of candidates) {
+  for (const vid of orderedIds) {
     if (shorts.length >= perChannel) break;
-    const detail = byId.get(cand.id);
+    const detail = byId.get(vid);
     if (!detail) continue;
     const dur = parseISODuration(detail.contentDetails.duration);
     if (dur === 0 || dur > 65) continue;
-
     const sn = detail.snippet;
+    if (!sn) continue;
     shorts.push({
-      id: cand.id,
-      title: sn?.title ?? cand.title,
-      channelId: sn?.channelId ?? cand.channelId,
-      channelTitle: sn?.channelTitle ?? cand.channelTitle,
-      publishedAt: sn?.publishedAt ?? cand.publishedAt,
+      id: vid,
+      title: sn.title,
+      channelId: sn.channelId,
+      channelTitle: sn.channelTitle,
+      publishedAt: sn.publishedAt,
       thumbnail:
-        sn?.thumbnails?.high?.url ||
-        sn?.thumbnails?.medium?.url ||
-        cand.thumbnail ||
-        "",
+        sn.thumbnails?.high?.url || sn.thumbnails?.medium?.url || "",
       durationSec: dur,
     });
   }

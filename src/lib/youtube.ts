@@ -347,6 +347,10 @@ export async function fetchAllShorts(
     }
   }
 
+  if (all.length === 0) {
+    return fetchAllVideos(channels, perChannel);
+  }
+
   all.sort(
     (a, b) =>
       new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),

@@ -128,7 +128,8 @@ export async function fetchChannelShorts(
 }
 
 /**
- * Fetch shorts from many channels in parallel and interleave them.
+ * Fetch shorts from many channels in parallel, then sort everything
+ * by publishedAt descending so the feed is strictly chronological (newest first).
  */
 export async function fetchAllShorts(
   channels: Channel[],
@@ -138,31 +139,15 @@ export async function fetchAllShorts(
     channels.map((c) => fetchChannelShorts(c, perChannel)),
   );
 
-  const buckets: ShortVideo[][] = results
-    .map((r) => (r.status === "fulfilled" ? r.value : []))
-    // sort each channel by recency, newest first
-    .map((arr) =>
-      [...arr].sort(
-        (a, b) =>
-          new Date(b.publishedAt).getTime() -
-          new Date(a.publishedAt).getTime(),
-      ),
-    );
+  const all: ShortVideo[] = results.flatMap((r) =>
+    r.status === "fulfilled" ? r.value : [],
+  );
 
-  // Interleave round-robin so feed mixes channels
-  const merged: ShortVideo[] = [];
-  let added = true;
-  let i = 0;
-  while (added) {
-    added = false;
-    for (const bucket of buckets) {
-      if (bucket[i]) {
-        merged.push(bucket[i]);
-        added = true;
-      }
-    }
-    i++;
-  }
+  // Global sort: newest first across all channels
+  all.sort(
+    (a, b) =>
+      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
+  );
 
-  return merged;
+  return all;
 }

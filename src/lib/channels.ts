@@ -4,6 +4,12 @@ export type Channel = {
   handle?: string;
 };
 
+/**
+ * Increment when the default channel list changes. Drives localStorage merge
+ * so existing visitors pick up new sources (see storage.ts).
+ */
+export const DEFAULT_CHANNELS_VERSION = 2;
+
 // Default news channels (YouTube channel IDs)
 export const DEFAULT_CHANNELS: Channel[] = [
   { id: "UCupvZG-5ko_eiXAupbDfxWw", name: "CNN", handle: "@CNN" },

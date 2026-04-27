@@ -89,6 +89,7 @@ export default function Feed() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ channels: chans }),
+          cache: "no-store",
         });
         const data = (await res.json()) as ApiResponse;
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);

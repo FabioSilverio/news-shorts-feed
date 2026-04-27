@@ -1,14 +1,24 @@
 "use client";
 
 import type { Channel } from "./channels";
-import { DEFAULT_CHANNELS } from "./channels";
+import { DEFAULT_CHANNELS, DEFAULT_CHANNELS_VERSION } from "./channels";
 import type { ShortVideo } from "./youtube";
 
 const KEY_WATCHED = "nsf:watched:v1";
 const KEY_CHANNELS = "nsf:channels:v1";
 const KEY_CHANNELS_DEFAULTS_VERSION = "nsf:channels-defaults-version:v1";
 const KEY_QUEUE = "nsf:queue:v1";
-const CHANNELS_DEFAULTS_VERSION = "2026-04-27-extra-news-channels";
+
+const channelsDefaultsVersion = () => String(DEFAULT_CHANNELS_VERSION);
+
+function clearQueue() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(KEY_QUEUE);
+  } catch {
+    /* ignore */
+  }
+}
 
 // ---------- Watched videos ----------
 
@@ -67,25 +77,25 @@ export function loadChannels(): Channel[] {
     if (!raw) {
       localStorage.setItem(
         KEY_CHANNELS_DEFAULTS_VERSION,
-        CHANNELS_DEFAULTS_VERSION,
+        channelsDefaultsVersion(),
       );
       return DEFAULT_CHANNELS;
     }
     const arr = JSON.parse(raw) as Channel[];
     if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_CHANNELS;
 
-    const defaultsVersion = localStorage.getItem(KEY_CHANNELS_DEFAULTS_VERSION);
-    if (defaultsVersion !== CHANNELS_DEFAULTS_VERSION) {
+    const currentV = channelsDefaultsVersion();
+    const storedV = localStorage.getItem(KEY_CHANNELS_DEFAULTS_VERSION);
+    if (storedV !== currentV) {
       const existingIds = new Set(arr.map((c) => c.id));
       const merged = [
         ...arr,
         ...DEFAULT_CHANNELS.filter((c) => !existingIds.has(c.id)),
       ];
       localStorage.setItem(KEY_CHANNELS, JSON.stringify(merged));
-      localStorage.setItem(
-        KEY_CHANNELS_DEFAULTS_VERSION,
-        CHANNELS_DEFAULTS_VERSION,
-      );
+      localStorage.setItem(KEY_CHANNELS_DEFAULTS_VERSION, currentV);
+      // Stale carry-over would keep old "top" when hideWatched + watched overlap API list.
+      clearQueue();
       return merged;
     }
 
@@ -101,7 +111,7 @@ export function saveChannels(channels: Channel[]) {
     localStorage.setItem(KEY_CHANNELS, JSON.stringify(channels));
     localStorage.setItem(
       KEY_CHANNELS_DEFAULTS_VERSION,
-      CHANNELS_DEFAULTS_VERSION,
+      channelsDefaultsVersion(),
     );
   } catch {
     /* ignore */
